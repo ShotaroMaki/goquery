@@ -6,7 +6,7 @@
 
 以下の手順でインストールしてください。
 bash
-$ git clone https://github.com/your/repository.git
+$ git clone https://github.com/ShotaroMaki/goquery
 $ cd project-directory
 $ go mod tidy
 $ go run main.go
