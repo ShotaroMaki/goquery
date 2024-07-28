@@ -1,54 +1,323 @@
 package main
 
 import (
-	"encoding/json"
-	"fmt"
+	"database/sql"
 	"io/ioutil"
-	"net/http"
+	"os"
+	"strconv"
+	"strings"
+
+	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/app"
+	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/dialog"
+	"fyne.io/fyne/v2/layout"
+	"fyne.io/fyne/v2/theme"
+	"fyne.io/fyne/v2/widget"
+	md "github.com/JohannesKaufmann/html-to-markdown"
+	"github.com/PuerkitoBio/goquery"
+	_ "github.com/mattn/go-sqlite3"
 )
 
-// mydata is json strusture
-type Mydata struct {
-	Name string
-	Mail string
-	Tel  string
-}
-
-// Str get string value
-func (m *Mydata) str() string {
-	return "<\"" + "\" " + m.Mail + ", " + m.Tel + ">"
-}
-
 func main() {
-	// accese URL
-	p := "https://tuyano-dummy-data.firebaseio.com/mydata.json"
-	
-	//isGet information and error handring
-	re, er := http.Get(p)
-	if er != nil {
-		panic(er)
+
+	a := app.New()
+	w := a.NewWindow("app")
+	a.Settings().SetTheme(theme.DarkTheme())
+	edit := widget.NewMultiLineEntry()
+	sc := container.NewScroll(edit)
+	fnd := widget.NewEntry()
+	inf := widget.NewLabel("information bar.")
+
+	// show alert
+	showInfo := func(s string){
+	inf.SetText(s)
+	dialog.ShowInformation("info", s, w)
 	}
 
-	defer re.Body.Close()
-
-	// Extracting all contents
-	s, er := ioutil.ReadAll(re.Body)
-	if er != nil {
-		panic(er)
+	//error check
+	err := func(er error) bool{
+		if er != nil {
+			inf.SetText(er.Error())
+			return true
+		}
+		return false
 	}
 
-	// 　change to value of Golang
-	var data []interface{}
-	er = json.Unmarshal(s, &data)
-	if er != nil {
-		panic(er)
+	// open SQL and return DB
+	setDB := func() *sql.DB {
+		con, er := sql.Open("sqlite3", "data.sqlite3")
+		if err(er) {
+			return nil
+		}
+		return con
 	}
 
-	// Extracting data from an array with a for statement
-	for i, im := range data {
-		// in type assertion
-		// example: org := value.(type)
-		m := im.(map[string]interface{})
-		fmt.Println(i, m["name"].(string), m["mail"].(string),m["tel"].(string))
+
+	//set New form function
+	nf := func() {
+		dialog.ShowConfirm("Alert", "Clear form?", func(f bool) {
+			if f {
+				fnd.SetText("")
+				w.SetTitle("App")
+				edit.SetText("")
+				inf.SetText("Clera form.")
+			}
+		}, w)
 	}
+
+	// get web data function
+	wf := func() {
+		fstr := fnd.Text
+		if !strings.HasPrefix(fstr, "http") {
+			fstr = "http://" + fstr
+			fnd.SetText(fstr)
+		}
+
+		dc, er := goquery.NewDocument(fstr)
+		if err(er) {
+			return
+		}
+		ttl := dc.Find("title")
+		w.SetTitle(ttl.Text())
+		html, er := dc.Html()
+		if err(er) {
+			return
+		}
+		cvtr := md.NewConverter("", true, nil)
+		mkdn, er := cvtr.ConvertString(html)
+		if err(er) {
+			return
+		}
+		edit.SetText(mkdn)
+		inf.SetText("get web data.")
+	}
+	// find data function
+	ff := func() {
+		var qry string = "select * from md_data where title like ?"
+		con := setDB()
+		if con == nil {
+			return
+		}
+		defer con.Close()
+
+		rs, er := con.Query(qry, "%" + fnd.Text+"%")
+		if err(er) {
+			return
+		}
+		res := ""
+		for rs.Next() {
+			var ID int
+			var TT string
+			var UR string
+			var MR string
+			er := rs.Scan(&ID, &TT, &UR, &MR)
+			if err(er) {
+				return
+			}
+			res += strconv.Itoa(ID) + ":" + TT + "\n"
+		}
+		edit.SetText(res)
+		inf.SetText("Find:" + fnd.Text)
+	}
+
+	//find by id function
+	idf := func(id int) {
+		var qry string = "select * from md_data where id = ?"
+		con := setDB()
+		if con == nil {
+			return
+		}
+		defer con.Close()
+
+		rs := con.QueryRow(qry, id)
+
+		var ID int
+		var TT string
+		var UR string
+		var MR string
+		rs.Scan(&ID, &TT, &UR, &MR)
+		w.SetTitle(TT)
+		fnd.SetText(UR)
+		edit.SetText(MR)
+		inf.SetText("Find id = " + strconv.Itoa(ID) + ".")
+	}
+
+// save function
+	sf := func() {
+		dialog.ShowConfirm("Alert", "Save data?", func(f bool) {
+			if f {
+				con := setDB()
+				if con == nil {
+					return
+				}
+				defer con.Close()
+
+				qry := "insert into md_data (title, url, markdown) values(?, ?, ?)"
+				_, er := con.Exec(qry, w.Title(), fnd.Text, edit.Text)
+				if err(er) {
+					return
+				}
+				showInfo("Save data to database!")
+			}
+		}, w)
+	}
+
+	// Export data function
+	xf := func() {
+		dialog.ShowConfirm("Alert", "Export this data?", func(f bool) {
+			if f {
+				fn := w.Title() + ".md"
+				ctt := "# " + w.Title() + "\n\n"
+				ctt += "## " + fnd.Text + "\n\n"
+				ctt += edit.Text
+				er := ioutil.WriteFile(fn, []byte(ctt), os.ModePerm)
+				if err(er) {
+					return
+				}
+				showInfo("Export data to file \"" + fn + "\".")
+			}
+		}, w)
+	}
+
+	// quit function
+	qf := func() {
+		dialog.ShowConfirm("Alert", "Quit application?", func(f bool) {
+			if f {
+				a.Quit()
+			}
+		}, w)
+	}
+
+	tf := true
+
+	// change theme function
+	cf  := func() {
+		if tf {
+			a.Settings().SetTheme(theme.LightTheme())
+			inf.SetText("change to Light-Theme.")
+		} else {
+			a.Settings().SetTheme(theme.DarkTheme())
+			inf.SetText("change to Dark-Theme.")
+		}
+		tf = !tf
+	}
+
+	// create button function
+	cbtn := widget.NewButton("Clear", func() {
+		nf()
+	})
+	wbtn := widget.NewButton("Get Web", func() {
+		wf()
+	})
+	fbtn := widget.NewButton("Find data", func() {
+		ff()
+	})
+	ibtn := widget.NewButton("Get ID data", func() {
+		rid, er := strconv.Atoi(fnd.Text)
+		if err(er) {
+			return
+		}
+		idf(rid)
+	})
+	sbtn := widget.NewButton("Save data", func() {
+		sf()
+	})
+	xbtn := widget.NewButton("Export data", func() {
+		xf()
+	})
+
+	// create menubar function
+	createMenubar := func() *fyne.MainMenu {
+		return fyne.NewMainMenu(
+			fyne.NewMenu("File",
+				fyne.NewMenuItem("New", func() {
+					nf()
+				}),
+				fyne.NewMenuItem("Get Web", func() {
+					wf()
+				}),
+				fyne.NewMenuItem("Find", func() {
+					ff()
+				}),
+				fyne.NewMenuItem("Save", func() {
+					sf()
+				}),
+				fyne.NewMenuItem("Export", func() {
+					xf()
+				}),
+				fyne.NewMenuItem("Change Theme", func() {
+					cf()
+				}),
+				fyne.NewMenuItem("Quit", func() {
+					qf()
+				}),
+			),
+			fyne.NewMenu("Edit",
+				fyne.NewMenuItem("Cut", func() {
+					edit.TypedShortcut(
+						&fyne.ShortcutCut{
+							Clipboard: w.Clipboard()})
+						inf.SetText("Cut text.")
+				}),
+				fyne.NewMenuItem("Copy", func() {
+					edit.TypedShortcut(
+						&fyne.ShortcutCopy{
+							Clipboard: w.Clipboard()})
+					inf.SetText("Copy text")
+				}),
+				fyne.NewMenuItem("Paste", func() {
+					edit.TypedShortcut(
+						&fyne.ShortcutPaste{
+							Clipboard: w.Clipboard()})
+					inf.SetText("Paste text")
+				}),
+			), 
+		)
+	}
+
+	// create toolbar function
+	createToolbar := func() *widget.Toolbar {
+		return widget.NewToolbar(
+			widget.NewToolbarAction(
+				theme.DocumentCreateIcon(), func() {
+					nf()
+				}),
+			widget.NewToolbarAction(
+				theme.NavigateNextIcon(), func() {
+					wf()
+				}),
+			widget.NewToolbarAction(
+				theme.DocumentSaveIcon(), func() {
+					sf()
+				}),
+		)
+	}
+
+	mb := createMenubar()
+	tb := createToolbar()
+
+	fc := container.NewVBox(
+		tb,
+		widget.NewForm(
+				widget.NewFormItem(
+						"FIND", fnd,
+				),
+		),
+		container.NewHBox(
+			cbtn, wbtn, fbtn, ibtn, sbtn, xbtn,),
+	)
+
+	w.SetMainMenu(mb)
+	w.SetContent(
+		fyne.NewContainerWithLayout(
+			layout.NewBorderLayout(
+				fc, inf, nil, nil,
+			),
+			fc, inf, sc,
+		),
+	)
+	w.Resize(fyne.NewSize(500, 500))
+	w.ShowAndRun()
+
 }
