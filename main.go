@@ -21,6 +21,7 @@ import (
 
 func main() {
 
+	// create widget
 	a := app.New()
 	w := a.NewWindow("app")
 	a.Settings().SetTheme(theme.DarkTheme())
@@ -78,7 +79,7 @@ func main() {
 		if err(er) {
 			return
 		}
-		ttl := dc.Find("title")
+		ttl := dc.Find("title")	
 		w.SetTitle(ttl.Text())
 		html, er := dc.Html()
 		if err(er) {
